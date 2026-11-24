@@ -1,31 +1,51 @@
 # radio
 
-One container: plays a JSON playlist top to bottom (looping), downloading a few
-tracks ahead, and serves the stream + a player page on one port.
-Built on [Liquidsoap 2.4](https://www.liquidsoap.info/doc-2.4.6/) (`request.dynamic`, `output.harbor`, `harbor.http.register`).
+One container, any number of **stations**. Each station plays its JSON playlist top to
+bottom (looping) on its own live timeline: every listener of a station hears the same
+moment. Built on [Liquidsoap 2.4](https://www.liquidsoap.info/doc-2.4.6/)
+(`request.dynamic`, `output.harbor`, `harbor.http.register`).
 
 | Path | What |
 |---|---|
-| `/` | player page (`www/index.html`) |
-| `/stream` | 128 kbps MP3 stream |
-| `/nowplaying` | `{title, artist, album}` JSON |
-| `POST /playlist` | replace the playlist (`Authorization: Bearer <token>`) |
+| `/` | station list (links, colors, now playing) |
+| `/listen/<name>` | player page for one station, in its color |
+| `/stream/<name>` | 128 kbps MP3 stream |
+| `/nowplaying/<name>` | `{name, color, tracks, listeners, title, artist, album}` |
+| `/stations` | the same for every station, as a list |
+| `POST /playlist` | create or replace a station (`Authorization: Bearer <token>`) |
 
-## Playlist
+## Building playlists
 
 ```sh
-python playlist.py scrape https://the-site/page-with-mp3-links   # -> playlist.json (url + title)
-python playlist.py shuffle                                         # randomize order in place
-python playlist.py push https://radio.example.com                  # replace the live playlist
+# andymp3.com: the green (#8AFB17) shows on one or more artist pages, every track,
+# artist + album (show name) filled in. --all for every show; waits 1 s between requests.
+python andymp3.py "https://andymp3.com/music/getArtistDetail.aspx?q=/acdc&id=510" -o acdc.json
+
+python playlist.py scrape https://any-site/page-with-mp3-links -o mix.json   # generic: url + title
+python playlist.py shuffle acdc.json                                           # randomize in place
 ```
 
-Format: see `playlist.example.json` (`url` required; `title`, `artist`, `album` optional).
-Order = play order. No rebuild or redeploy: `push` replaces the playlist live; the current
-song finishes, then the new list starts from the top. The playlist and play position live in the
-`radio-data` volume, so restarts resume (skipping the few tracks that were prefetched but not
-played). Empty playlist = silence. Broken URLs are skipped.
+Playlist format: see `playlist.example.json` (`url` required; `title`, `artist`, `album` optional).
+Order = play order.
 
-Source-server load: each track is fetched once per play (one HEAD + one GET), never per listener.
+## Stations
+
+```sh
+python playlist.py push https://radio.example.com acdc.json --name acdc --color "#8AFB17"
+```
+
+- `--name`: 1-40 of `a-z 0-9 -`. Pushing an existing name **replaces** its playlist (no warning);
+  the current song finishes, then the new list starts from the top.
+- `--color`: `#RRGGBB`. Optional: a new station gets a random one from a bright palette; a
+  replaced station keeps its color unless you pass one.
+- No rebuild or redeploy. Stations, playlists and play positions live in the `radio-data` volume
+  (`/data/stations/<name>.json`), so restarts resume (skipping the few prefetched tracks).
+- A bare JSON array POSTed without a name goes to the station `main`.
+- Broken URLs are skipped. There is no delete endpoint: remove `/data/stations/<name>.*` and restart.
+
+Source-server load: a station **only fetches tracks while someone is listening**. Idle, it
+finishes what it already downloaded and plays silence; the first listener starts it again
+(about 2 s). Each played track is one HEAD + one GET to the source, never one per listener.
 
 ### Token
 
@@ -45,7 +65,7 @@ Source-server load: each track is fetched once per play (one HEAD + one GET), ne
 ```sh
 export PLAYLIST_TOKEN_MD5=$(tr -d '\r\n' < ~/.config/radio/token | md5sum | cut -d' ' -f1)
 docker compose up -d --build                       # http://localhost/
-python playlist.py push http://localhost
+python playlist.py push http://localhost acdc.json --name acdc
 ```
 
 ## Deploy on Oracle Cloud (Always Free, Ampere A1 / Ubuntu)
@@ -62,7 +82,7 @@ python playlist.py push http://localhost
      sudo netfilter-persistent save
      ```
 4. Copy `docker-compose.yml` to the VM, then `docker compose pull && docker compose up -d`,
-   then from your machine `python playlist.py push https://radio.<yourdomain>`. Image: `ghcr.io/areaewhy/radio` (amd64 + arm64,
+   then from your machine `python playlist.py push https://radio.<yourdomain> acdc.json --name acdc`. Image: `ghcr.io/areaewhy/radio` (amd64 + arm64,
    built by `.github/workflows/image.yml` on every push to `main`).
 5. Idle reclaim: Oracle may reclaim an Always Free VM that stays mostly idle for 7 days; upgrading the
    account to Pay-As-You-Go avoids it (still free within limits; set a budget alert).
