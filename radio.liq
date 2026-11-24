@@ -44,16 +44,18 @@ def parse_tracks(s) =
   t
 end
 
-# {name, color?, tracks, live?, start?}; a bare array means the station "main".
-# live: hidden from /stations, no looping, and `start` is the track playing now.
+# {name, color?, tracks, live?, start?, fallback?}; a bare array means the station "main".
+# live: hidden from /stations, `start` is the track playing now, and when the queue
+# runs out (or is empty) the station loops `fallback`. fallback absent = keep the old one.
 def parse_post(s) =
   try
     let json.parse (p : {name: string, color: string?, live: bool?, start: int?,
-      tracks: [{url: string, title: string?, artist: string?, album: string?}]}) = s
+      tracks: [{url: string, title: string?, artist: string?, album: string?}],
+      fallback: [{url: string, title: string?, artist: string?, album: string?}]?}) = s
     (string.case(lower=true, string.trim(p.name)), p.color ?? "", p.tracks,
-     p.live ?? false, p.start ?? 0)
+     p.live ?? false, p.start ?? 0, p.fallback)
   catch _ do
-    ("main", "", parse_tracks(s), false, 0)
+    ("main", "", parse_tracks(s), false, 0, null)
   end
 end
 
@@ -69,8 +71,10 @@ def read_int(f) =
   else 0 end
 end
 
-def make_station(name, color, initial, live) =
+def make_station(name, color, initial, live, initial_fallback) =
   tracks = ref(initial)
+  fallback = ref(initial_fallback)
+  fpos = ref(0)
   color = ref(color)
   pos_file = "#{stations_dir}/#{name}.pos"
   pos = ref(read_int(pos_file))
@@ -82,19 +86,31 @@ def make_station(name, color, initial, live) =
     file.write(data=string(p), pos_file)
   end
 
+  def track_request(t) =
+    meta = [("title", t.title ?? ""), ("artist", t.artist ?? ""), ("album", t.album ?? "")]
+    meta = list.filter(fun (kv) -> snd(kv) != "", meta)
+    meta = list.add(("radio_url", t.url), meta)   # identifies the playing track
+    ann = string.concat(separator=",",
+      list.map(fun (kv) -> "#{fst(kv)}=\"#{string.escape(snd(kv))}\"", meta))
+    request.create("annotate:#{ann}:#{t.url}")
+  end
+
   # Position counts tracks queued, so a restart skips the few prefetched tracks.
-  # A live station stops at the end of its queue instead of looping.
+  # A live station plays its queue once, then loops its fallback (if any).
   def next() =
     n = list.length(tracks())
-    if n == 0 or (live and pos() >= n) then null else
+    if live and pos() >= n then
+      m = list.length(fallback())
+      if m == 0 then null else
+        t = list.nth(fallback(), fpos() mod m)
+        fpos := fpos() + 1
+        track_request(t)
+      end
+    elsif n == 0 then null
+    else
       t = list.nth(tracks(), pos() mod n)
       set_pos(if live then pos() + 1 else (pos() + 1) mod n end)
-      meta = [("title", t.title ?? ""), ("artist", t.artist ?? ""), ("album", t.album ?? "")]
-      meta = list.filter(fun (kv) -> snd(kv) != "", meta)
-      meta = list.add(("radio_url", t.url), meta)   # identifies the playing track
-      ann = string.concat(separator=",",
-        list.map(fun (kv) -> "#{fst(kv)}=\"#{string.escape(snd(kv))}\"", meta))
-      request.create(if ann == "" then t.url else "annotate:#{ann}:#{t.url}" end)
+      track_request(t)
     end
   end
 
@@ -111,11 +127,18 @@ def make_station(name, color, initial, live) =
   out.on_disconnect(synchronous=false,
     fun (_) -> listeners := if listeners() > 0 then listeners() - 1 else 0 end)
 
-  def replace(t, start) =
+  def replace(t, start, fb) =
     tracks := t
+    if null.defined(fb) then
+      fallback := null.get(fb)
+      fpos := 0
+    end
     queue.set_queue([])   # drop prefetched tracks
     if not live then
       set_pos(0)          # current song finishes, then the new list from the top
+    elsif list.length(t) == 0 then
+      set_pos(0)          # nothing live (or streaming switched off): fallback, now
+      queue.skip()
     else
       start = if start < 0 or start >= list.length(t) then 0 else start end
       m = now()
@@ -131,7 +154,7 @@ def make_station(name, color, initial, live) =
   end
   log.important("Station #{name}: #{list.length(initial)} tracks#{if live then ' (live)' else '' end}")
   {name=name, color=color, tracks=tracks, listeners=listeners, now=now,
-   replace=replace, live=live}
+   replace=replace, live=live, fallback=fallback}
 end
 
 # [] or [station]
@@ -139,18 +162,18 @@ def find(name) =
   list.map(snd, list.filter(fun (kv) -> fst(kv) == name, stations()))
 end
 
-def save(name, color, tracks, live) =
-  file.write(data=json.stringify({name=name, color=color, tracks=tracks, live=live}),
-    "#{stations_dir}/#{name}.json")
+def save(name, color, tracks, live, fallback) =
+  file.write(data=json.stringify({name=name, color=color, tracks=tracks, live=live,
+    fallback=fallback}), "#{stations_dir}/#{name}.json")
 end
 
 # Load saved stations.
 list.iter(fun (f) -> begin
     if string.contains(suffix=".json", f) then
       try
-        let (name, color, t, live, _) = parse_post(file.contents("#{stations_dir}/#{f}"))
+        let (name, color, t, live, _, fb) = parse_post(file.contents("#{stations_dir}/#{f}"))
         color = if valid_color(color) then color else random_color() end
-        stations := list.add((name, make_station(name, color, t, live)), stations())
+        stations := list.add((name, make_station(name, color, t, live, fb ?? [])), stations())
       catch err do
         log.severe("Skipping #{f}: #{err.message}")
       end
@@ -212,16 +235,18 @@ def set_playlist(req, res) =
     message(res, 401, "bad token")
   else
     try
-      let (name, color, t, live, start) = parse_post(req.body())
+      let (name, color, t, live, start, fb) = parse_post(req.body())
       if not valid_name(name) then
         error.raise(error.invalid, "name must be 1-40 of a-z, 0-9, - (got \"#{name}\")")
       end
       if color != "" and not valid_color(color) then
         error.raise(error.invalid, "color must be #RRGGBB (got \"#{color}\")")
       end
-      if list.length(t) == 0 then error.raise(error.invalid, "no tracks") end
+      # A live station may be emptied (it then plays its fallback); a playlist may not.
+      if list.length(t) == 0 and not live then error.raise(error.invalid, "no tracks") end
       # Only web URLs: no file://, no other protocols or local paths.
-      bad = list.filter(fun (x) -> not r/^https?:\/\/[^\s]+$/i.test(x.url), t)
+      bad = list.filter(fun (x) -> not r/^https?:\/\/[^\s]+$/i.test(x.url),
+        list.append(t, fb ?? []))
       if list.length(bad) > 0 then
         error.raise(error.invalid,
           "#{list.length(bad)} track url(s) not http(s), e.g. \"#{list.hd(bad).url}\"")
@@ -230,16 +255,17 @@ def set_playlist(req, res) =
       if list.length(s) > 0 then
         s = list.hd(s)
         if color != "" then s.color := color end
-        s.replace(t, start)
-        save(name, s.color(), t, s.live)
+        s.replace(t, start, fb)
+        save(name, s.color(), t, s.live, s.fallback())
         message(res, 200, "#{name}: replaced, #{list.length(t)} tracks, #{s.color()}" ^
-          (if s.live then "" else "; starts after the current song" end))
+          (if s.live then ", #{list.length(s.fallback())} fallback"
+           else "; starts after the current song" end))
       else
         c = if color != "" then color else random_color() end
-        s = make_station(name, c, t, live)
-        if live then s.replace(t, start) end
+        s = make_station(name, c, t, live, fb ?? [])
+        if live then s.replace(t, start, null) end
         stations := list.add((name, s), stations())
-        save(name, c, t, live)
+        save(name, c, t, live, fb ?? [])
         message(res, 201, "#{name}: created, #{list.length(t)} tracks, #{c}")
       end
     catch err do

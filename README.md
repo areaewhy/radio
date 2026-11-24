@@ -44,6 +44,8 @@ python playlist.py push https://radio.example.com acdc.json --name acdc --color 
 `"live": true, "start": <i>` in the POST makes a **live** station: hidden from `/` and
 `/stations` (reachable only by its name), no looping, and `start` is the song playing right now.
 A POST whose `start` song is already playing just swaps the queue; any other jumps to it.
+Optional `fallback: [...]` loops when the queue runs out; an empty `tracks` switches to it at
+once (jellytune's "Radio: off"). Omit `fallback` to keep the last one sent.
 [jellytune](https://github.com/areaewhy/jellytune) uses this to mirror each user's queue.
 
 Source-server load: a station **only fetches tracks while someone is listening**. Idle, it
