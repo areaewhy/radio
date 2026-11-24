@@ -119,7 +119,31 @@ def make_station(name, color, initial, live, initial_fallback) =
   queue = request.dynamic(prefetch=prefetch, retry_delay=1.,
     available={listeners() > 0}, next)
   src = mksafe(queue)
-  src.on_metadata(synchronous=false, fun (m) -> now := m)
+  prev = ref([])
+  src.on_metadata(synchronous=false, fun (m) -> begin
+    cur = now()
+    if m["radio_url"] != cur["radio_url"] then prev := cur end
+    now := m
+  end)
+
+  # The song after this one, for listeners to peek at: the first downloaded-ahead
+  # request, else the next one the queue/fallback would hand out.
+  def peek_next() =
+    q = queue.queue()
+    if list.length(q) > 0 then request.metadata(list.hd(q))
+    else
+      n = list.length(tracks())
+      m = list.length(fallback())
+      t =
+        if live and pos() >= n then (if m > 0 then [list.nth(fallback(), fpos() mod m)] else [] end)
+        elsif n > 0 then [list.nth(tracks(), pos() mod n)]
+        else [] end
+      if list.length(t) == 0 then [] else
+        x = list.hd(t)
+        [("title", x.title ?? ""), ("artist", x.artist ?? "")]
+      end
+    end
+  end
   out = output.harbor(
     %ffmpeg(format="mp3", %audio(codec="libmp3lame", b="#{bitrate}k")),
     port=port, mount="stream/#{name}", format="audio/mpeg", src)
@@ -154,7 +178,9 @@ def make_station(name, color, initial, live, initial_fallback) =
   end
   log.important("Station #{name}: #{list.length(initial)} tracks#{if live then ' (live)' else '' end}")
   {name=name, color=color, tracks=tracks, listeners=listeners, now=now,
-   replace=replace, live=live, fallback=fallback}
+   replace=replace, live=live, fallback=fallback,
+   elapsed=queue.elapsed, duration=queue.duration, playing=queue.is_ready,
+   prev=prev, peek_next=peek_next}
 end
 
 # [] or [station]
@@ -192,9 +218,18 @@ def message(res, code, msg) = send_json(res, code, json.stringify({message = msg
 
 def info(s) =
   m = s.now()
+  p = s.prev()
+  nx = s.peek_next()
+  # Read-only peek: listeners can see the previous and next song, not skip.
+  before = {title = p["title"], artist = p["artist"]}
+  after = {title = nx["title"], artist = nx["artist"]}
+  # Seconds into / length of the current song; -1 when nothing is playing.
+  el = if s.playing() then s.elapsed() else -1. end
+  du = if s.playing() then s.duration() else -1. end
   {name = s.name, color = s.color(), tracks = list.length(s.tracks()),
    listeners = s.listeners(), title = m["title"], artist = m["artist"],
-   album = m["album"], hidden = s.live}
+   album = m["album"], hidden = s.live, elapsed = el, duration = du,
+   previous = before, upcoming = after}
 end
 
 # Live stations are secret: only reachable by their (unguessable) name.

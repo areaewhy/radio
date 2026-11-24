@@ -12,7 +12,16 @@
   a.back { position: fixed; top: 1rem; left: 1rem; color: inherit; opacity: .6; text-decoration: none; }
   h1 { font-size: .9rem; letter-spacing: .25em; text-transform: uppercase; color: var(--c); margin: 0 0 1.5rem; }
   #title { font-size: 1.7rem; font-weight: 650; margin: .5rem 0 .25rem; }
-  #artist { opacity: .75; margin: 0 0 2rem; min-height: 1.2em; }
+  #artist { opacity: .75; margin: 0 0 1.25rem; min-height: 1.2em; }
+  #progress { margin: 0 auto 2rem; width: min(22rem, 80vw); visibility: hidden; }
+  #progress .bar { height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--c) 25%, #333); overflow: hidden; }
+  #progress .fill { height: 100%; width: 0; background: var(--c); transition: width 1s linear; }
+  #progress .times { display: flex; justify-content: space-between; font-size: .75rem; opacity: .6;
+                     margin-top: .35rem; font-variant-numeric: tabular-nums; }
+  .peek { display: grid; grid-template-columns: auto 1fr; gap: .2rem .6rem; text-align: left;
+          width: min(22rem, 80vw); margin: -1rem auto 2rem; font-size: .85rem; }
+  .peek dt { color: var(--c); opacity: .8; font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; padding-top: .15rem; }
+  .peek dd { margin: 0; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   button { font: inherit; font-size: 1.1rem; padding: .7rem 2.2rem; border-radius: 99px; cursor: pointer;
            border: 2px solid var(--c); background: none; color: var(--c); }
   button.on { background: var(--c); color: #0b0b0b; }
@@ -25,6 +34,14 @@
   <h1 id="name">&nbsp;</h1>
   <p id="title">&nbsp;</p>
   <p id="artist"></p>
+  <div id="progress" aria-hidden="true">
+    <div class="bar"><div class="fill" id="fill"></div></div>
+    <div class="times"><span id="pos">0:00</span><span id="len">0:00</span></div>
+  </div>
+  <dl class="peek" id="peek" hidden>
+    <dt>Before</dt><dd id="prev"></dd>
+    <dt>Next</dt><dd id="next"></dd>
+  </dl>
   <button id="play" type="button">Tune in</button>
   <input id="vol" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
 </main>
@@ -59,10 +76,37 @@
       document.getElementById('title').textContent = m.title || (m.listeners ? 'Loading…' : 'Tune in to start');
       document.getElementById('artist').textContent = [m.artist, m.album].filter(Boolean).join(' — ');
       document.title = (m.title ? m.title + ' · ' : '') + name;
+      // Peek only: listeners see the previous and next song but cannot switch.
+      const label = t => t && t.title ? [t.title, t.artist].filter(Boolean).join(' — ') : '—';
+      document.getElementById('prev').textContent = label(m.previous);
+      document.getElementById('next').textContent = label(m.upcoming);
+      document.getElementById('peek').hidden = !(m.previous?.title || m.upcoming?.title);
+      // Progress: the server's position, advanced locally between polls.
+      song = m.duration > 0 && m.elapsed >= 0 ? { elapsed: m.elapsed, duration: m.duration, at: Date.now() } : null;
+      tick();
+      // Poll again right after this song should end so the next title shows promptly.
+      clearTimeout(poll);
+      const left = song ? (song.duration - song.elapsed) * 1000 + 1500 : 10000;
+      poll = setTimeout(refresh, Math.max(1500, Math.min(10000, left)));
+      return;
     } catch { /* station offline; keep last value */ }
+    clearTimeout(poll);
+    poll = setTimeout(refresh, 10000);
   }
+
+  let song = null, poll = 0;
+  const fmt = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  function tick() {
+    const box = document.getElementById('progress');
+    if (!song) { box.style.visibility = 'hidden'; return; }
+    const pos = Math.min(song.duration, song.elapsed + (Date.now() - song.at) / 1000);
+    box.style.visibility = 'visible';
+    document.getElementById('fill').style.width = (100 * pos / song.duration).toFixed(2) + '%';
+    document.getElementById('pos').textContent = fmt(pos);
+    document.getElementById('len').textContent = fmt(song.duration);
+  }
+  setInterval(tick, 1000);
   refresh();
-  setInterval(refresh, 10000);
 </script>
 </body>
 </html>
