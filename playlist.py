@@ -2,14 +2,21 @@
 
   python playlist.py scrape <page-url> [-o playlist.json] [--shuffle]
   python playlist.py shuffle [playlist.json]
+  python playlist.py push <station-url> [playlist.json]
+
+push sends the file to POST /playlist. Token: RADIO_TOKEN env var, else
+~/.config/radio/token (keep it out of the repo).
 
 playlist.json is a list of {"url", "title"?, "artist"?, "album"?}.
 Scrape fills url + title (link text, else file name); edit the rest by hand.
 """
 import argparse
 import json
+import os
+import pathlib
 import random
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
@@ -59,6 +66,24 @@ def write(tracks, path):
     print(f"{len(tracks)} tracks -> {path}", file=sys.stderr)
 
 
+def push(station, path):
+    token_file = pathlib.Path.home() / ".config" / "radio" / "token"
+    token = os.environ.get("RADIO_TOKEN") or token_file.read_text().strip()
+    with open(path, "rb") as f:
+        body = f.read()
+    json.loads(body)  # fail locally on bad JSON
+    req = urllib.request.Request(
+        station.rstrip("/") + "/playlist", data=body, method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                 "User-Agent": "playlist-push/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            print(r.status, r.read().decode())
+    except urllib.error.HTTPError as e:
+        print(e.code, e.read().decode(), file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -68,6 +93,9 @@ def main():
     s.add_argument("--shuffle", action="store_true")
     sh = sub.add_parser("shuffle")
     sh.add_argument("file", nargs="?", default="playlist.json")
+    pu = sub.add_parser("push")
+    pu.add_argument("station")
+    pu.add_argument("file", nargs="?", default="playlist.json")
     a = ap.parse_args()
 
     if a.cmd == "scrape":
@@ -75,6 +103,8 @@ def main():
         if a.shuffle:
             random.shuffle(tracks)
         write(tracks, a.out)
+    elif a.cmd == "push":
+        push(a.station, a.file)
     else:
         with open(a.file, encoding="utf-8") as f:
             tracks = json.load(f)
