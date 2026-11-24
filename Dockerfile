@@ -5,7 +5,6 @@ RUN mkdir -p /data && chown liquidsoap:liquidsoap /data
 USER liquidsoap
 COPY radio.liq /radio/radio.liq
 COPY www/ /radio/www/
-# Baked in: edit playlist.json, then `docker compose up -d --build`.
-COPY playlist.json /radio/playlist.json
+# playlist.json is mounted at runtime, not baked in (image is public).
 EXPOSE 8000
 CMD ["/radio/radio.liq"]

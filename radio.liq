@@ -13,6 +13,14 @@ www_dir = "/radio/www"
 pos_file = "/data/position"
 
 # --- playlist -------------------------------------------------------------
+# Mounted at runtime (see docker-compose.yml). Docker turns a missing bind
+# source into an empty directory, so check for that too.
+if not file.exists(playlist_file) or file.is_directory(playlist_file) then
+  print("FATAL: #{playlist_file} missing. Put playlist.json next to " ^
+        "docker-compose.yml (if Docker created a playlist.json folder, delete it).")
+  exit(1)
+end
+
 let json.parse (tracks :
   [{url: string, title: string?, artist: string?, album: string?}]) =
   file.contents(playlist_file)

@@ -20,7 +20,7 @@ python playlist.py shuffle                                         # randomize o
 Format: see `playlist.example.json` (`url` required; `title`, `artist`, `album` optional).
 Order = play order. Position is saved in the `radio-data` volume, so restarts resume
 (skipping the few tracks that were prefetched but not played). Edit the JSON, then
-`docker compose up -d --build` (it is baked into the image). Broken URLs are skipped.
+`docker compose restart` (it is mounted, not in the image). Broken URLs are skipped.
 
 Source-server load: each track is fetched once per play (one HEAD + one GET), never per listener.
 
@@ -43,7 +43,9 @@ docker compose up -d --build     # http://localhost/
      sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
      sudo netfilter-persistent save
      ```
-4. `git clone` this repo, copy your `playlist.json` next to `docker-compose.yml` (or commit it), `docker compose up -d --build`.
+4. Copy `docker-compose.yml` and your `playlist.json` into one folder on the VM, then
+   `docker compose pull && docker compose up -d`. Image: `ghcr.io/areaewhy/radio` (amd64 + arm64,
+   built by `.github/workflows/image.yml` on every push to `main`).
 5. Idle reclaim: Oracle may reclaim an Always Free VM that stays mostly idle for 7 days; upgrading the
    account to Pay-As-You-Go avoids it (still free within limits; set a budget alert).
 

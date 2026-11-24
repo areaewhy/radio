@@ -1,6 +1,7 @@
 services:
   radio:
-    build: .
+    image: ghcr.io/areaewhy/radio:latest   # server: docker compose pull
+    build: .                               # local:  docker compose up -d --build
     restart: unless-stopped
     ports:
       - "80:8000"          # Cloudflare (Flexible SSL) -> VM:80 -> container:8000
@@ -8,6 +9,7 @@ services:
       BITRATE: "128"
       PREFETCH: "3"        # tracks downloaded ahead of the one playing
     volumes:
+      - ./playlist.json:/radio/playlist.json:ro
       - radio-data:/data   # play position, survives restarts
 volumes:
   radio-data:
