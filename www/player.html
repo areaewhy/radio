@@ -55,6 +55,7 @@
       if (r.status === 404) { document.getElementById('title').textContent = 'No such station'; btn.disabled = true; return; }
       const m = await r.json();
       document.documentElement.style.setProperty('--c', m.color);
+      if (m.hidden) document.querySelector('a.back')?.remove();
       document.getElementById('title').textContent = m.title || (m.listeners ? 'Loading…' : 'Tune in to start');
       document.getElementById('artist').textContent = [m.artist, m.album].filter(Boolean).join(' — ');
       document.title = (m.title ? m.title + ' · ' : '') + name;

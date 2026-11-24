@@ -39,6 +39,13 @@ python playlist.py push https://radio.example.com acdc.json --name acdc --color 
 - A bare JSON array POSTed without a name goes to the station `main`.
 - Broken URLs are skipped. There is no delete endpoint: remove `/data/stations/<name>.*` and restart.
 
+### Live stations (jellytune)
+
+`"live": true, "start": <i>` in the POST makes a **live** station: hidden from `/` and
+`/stations` (reachable only by its name), no looping, and `start` is the song playing right now.
+A POST whose `start` song is already playing just swaps the queue; any other jumps to it.
+[jellytune](https://github.com/areaewhy/jellytune) uses this to mirror each user's queue.
+
 Source-server load: a station **only fetches tracks while someone is listening**. Idle, it
 finishes what it already downloaded and plays silence; the first listener starts it again
 (about 2 s). Each played track is one HEAD + one GET to the source, never one per listener.
@@ -59,6 +66,10 @@ finishes what it already downloaded and plays silence; the first listener starts
 - Port 80 binds to `127.0.0.1` only: reachable from the server itself (and cloudflared), not the
   LAN or the internet. `BIND=0.0.0.0` in `.env` opens it up if you really need that.
 - Track URLs must be `http://` or `https://` (no `file://`, no local paths).
+- `LOCAL_POST_ONLY=true`: `POST /playlist` is refused (403) for any request that came through
+  Cloudflare (it carries `CF-Connecting-IP` / `CF-Ray`, which outside callers cannot strip), so only
+  things on the box or LAN (jellytune, ssh) can change stations. Pushes from elsewhere then go
+  through ssh: `python playlist.py push http://127.0.0.1:8688 ...` on the server.
 - Station names are `a-z 0-9 -`, colors `#RRGGBB`; pages insert text with `textContent`.
 - The container runs as the non-root `liquidsoap` user and only writes to its `/data` volume.
 - **No listener cap.** Liquidsoap's built-in server cannot limit or kick listeners. Each listener

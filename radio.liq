@@ -11,6 +11,12 @@ prefetch = int_of_string(environment.get(default="3", "PREFETCH"))# MD5 of the P
 # Empty = POST /playlist disabled.
 token_md5 = string.case(lower=true,
   string.trim(environment.get(default="", "PLAYLIST_TOKEN_MD5")))
+# true: refuse POST /playlist for anything that came through Cloudflare (the public
+# URL); only callers on the box / LAN (jellytune, ssh) can change stations.
+local_post_only = environment.get(default="false", "LOCAL_POST_ONLY") == "true"
+# Jellytune streams are extension-less Opus/WebM or M4A: tell the downloader.
+settings.http.mime.extnames := list.append(
+  [("audio/webm", "webm"), ("audio/mp4", "m4a")], settings.http.mime.extnames())
 www_dir = "/radio/www"
 stations_dir = "/data/stations"   # <name>.json (playlist) + <name>.pos
 
@@ -38,14 +44,16 @@ def parse_tracks(s) =
   t
 end
 
-# {name, color?, tracks}; a bare array means the station "main".
+# {name, color?, tracks, live?, start?}; a bare array means the station "main".
+# live: hidden from /stations, no looping, and `start` is the track playing now.
 def parse_post(s) =
   try
-    let json.parse (p : {name: string, color: string?,
+    let json.parse (p : {name: string, color: string?, live: bool?, start: int?,
       tracks: [{url: string, title: string?, artist: string?, album: string?}]}) = s
-    (string.case(lower=true, string.trim(p.name)), p.color ?? "", p.tracks)
+    (string.case(lower=true, string.trim(p.name)), p.color ?? "", p.tracks,
+     p.live ?? false, p.start ?? 0)
   catch _ do
-    ("main", "", parse_tracks(s))
+    ("main", "", parse_tracks(s), false, 0)
   end
 end
 
@@ -61,7 +69,7 @@ def read_int(f) =
   else 0 end
 end
 
-def make_station(name, color, initial) =
+def make_station(name, color, initial, live) =
   tracks = ref(initial)
   color = ref(color)
   pos_file = "#{stations_dir}/#{name}.pos"
@@ -75,13 +83,15 @@ def make_station(name, color, initial) =
   end
 
   # Position counts tracks queued, so a restart skips the few prefetched tracks.
+  # A live station stops at the end of its queue instead of looping.
   def next() =
     n = list.length(tracks())
-    if n == 0 then null else
+    if n == 0 or (live and pos() >= n) then null else
       t = list.nth(tracks(), pos() mod n)
-      set_pos((pos() + 1) mod n)
+      set_pos(if live then pos() + 1 else (pos() + 1) mod n end)
       meta = [("title", t.title ?? ""), ("artist", t.artist ?? ""), ("album", t.album ?? "")]
       meta = list.filter(fun (kv) -> snd(kv) != "", meta)
+      meta = list.add(("radio_url", t.url), meta)   # identifies the playing track
       ann = string.concat(separator=",",
         list.map(fun (kv) -> "#{fst(kv)}=\"#{string.escape(snd(kv))}\"", meta))
       request.create(if ann == "" then t.url else "annotate:#{ann}:#{t.url}" end)
@@ -101,14 +111,27 @@ def make_station(name, color, initial) =
   out.on_disconnect(synchronous=false,
     fun (_) -> listeners := if listeners() > 0 then listeners() - 1 else 0 end)
 
-  def replace(t) =
+  def replace(t, start) =
     tracks := t
-    set_pos(0)
-    queue.set_queue([])   # drop prefetched tracks; current song finishes
+    queue.set_queue([])   # drop prefetched tracks
+    if not live then
+      set_pos(0)          # current song finishes, then the new list from the top
+    else
+      start = if start < 0 or start >= list.length(t) then 0 else start end
+      m = now()
+      same = m["radio_url"] == list.nth(t, start).url
+      playing = queue.is_ready() and same
+      if playing then
+        set_pos(start + 1)  # same song still on: just carry on with the new queue
+      else
+        set_pos(start)
+        queue.skip()        # jump to the song being played now
+      end
+    end
   end
-  log.important("Station #{name}: #{list.length(initial)} tracks")
+  log.important("Station #{name}: #{list.length(initial)} tracks#{if live then ' (live)' else '' end}")
   {name=name, color=color, tracks=tracks, listeners=listeners, now=now,
-   replace=replace}
+   replace=replace, live=live}
 end
 
 # [] or [station]
@@ -116,8 +139,8 @@ def find(name) =
   list.map(snd, list.filter(fun (kv) -> fst(kv) == name, stations()))
 end
 
-def save(name, color, tracks) =
-  file.write(data=json.stringify({name=name, color=color, tracks=tracks}),
+def save(name, color, tracks, live) =
+  file.write(data=json.stringify({name=name, color=color, tracks=tracks, live=live}),
     "#{stations_dir}/#{name}.json")
 end
 
@@ -125,9 +148,9 @@ end
 list.iter(fun (f) -> begin
     if string.contains(suffix=".json", f) then
       try
-        let (name, color, t) = parse_post(file.contents("#{stations_dir}/#{f}"))
+        let (name, color, t, live, _) = parse_post(file.contents("#{stations_dir}/#{f}"))
         color = if valid_color(color) then color else random_color() end
-        stations := list.add((name, make_station(name, color, t)), stations())
+        stations := list.add((name, make_station(name, color, t, live)), stations())
       catch err do
         log.severe("Skipping #{f}: #{err.message}")
       end
@@ -148,13 +171,15 @@ def info(s) =
   m = s.now()
   {name = s.name, color = s.color(), tracks = list.length(s.tracks()),
    listeners = s.listeners(), title = m["title"], artist = m["artist"],
-   album = m["album"]}
+   album = m["album"], hidden = s.live}
 end
 
+# Live stations are secret: only reachable by their (unguessable) name.
 harbor.http.register(port=port, method="GET", "/stations", fun (_, res) ->
   send_json(res, 200, json.stringify(
     list.sort(fun (a, b) -> if a.name < b.name then -1 else 1 end,
-      list.map(fun (kv) -> info(snd(kv)), stations())))))
+      list.map(fun (kv) -> info(snd(kv)),
+        list.filter(fun (kv) -> not snd(kv).live, stations()))))))
 
 harbor.http.register(port=port, method="GET", "/nowplaying/:name", fun (req, res) -> begin
   s = find(list.assoc(default="", "name", req.query))
@@ -170,17 +195,24 @@ harbor.http.register(port=port, method="GET", "/listen/:name", fun (_, res) ->
 # POST /playlist  Authorization: Bearer <token>
 # Body: {"name": "acdc", "color": "#8AFB17" (optional), "tracks": [...]}
 # Same name overwrites. A bare array means the station "main".
+# Live (jellytune): add "live": true, "start": <index of the song playing now>.
 def set_playlist(req, res) =
-  auth = list.assoc(default="", "authorization",
-    list.map(fun (h) -> (string.case(lower=true, fst(h)), snd(h)), req.headers))
+  headers = list.map(fun (h) -> (string.case(lower=true, fst(h)), snd(h)), req.headers)
+  auth = list.assoc(default="", "authorization", headers)
   given = string.trim(string.residual(prefix="Bearer ", auth) ?? "")
-  if token_md5 == "" then
+  # Cloudflare adds these to every request it forwards (tunnel or proxy), and an
+  # outside caller cannot remove them: their presence means "came from the internet".
+  cf = list.filter(fun (h) -> fst(h) == "cf-connecting-ip" or fst(h) == "cf-ray", headers)
+  via_cloudflare = list.length(cf) > 0
+  if local_post_only and via_cloudflare then
+    message(res, 403, "updates are only accepted from the local network")
+  elsif token_md5 == "" then
     message(res, 403, "updates disabled (no token configured)")
   elsif given == "" or string.digest(given) != token_md5 then
     message(res, 401, "bad token")
   else
     try
-      let (name, color, t) = parse_post(req.body())
+      let (name, color, t, live, start) = parse_post(req.body())
       if not valid_name(name) then
         error.raise(error.invalid, "name must be 1-40 of a-z, 0-9, - (got \"#{name}\")")
       end
@@ -198,13 +230,16 @@ def set_playlist(req, res) =
       if list.length(s) > 0 then
         s = list.hd(s)
         if color != "" then s.color := color end
-        s.replace(t)
-        save(name, s.color(), t)
-        message(res, 200, "#{name}: replaced, #{list.length(t)} tracks, #{s.color()}; starts after the current song")
+        s.replace(t, start)
+        save(name, s.color(), t, s.live)
+        message(res, 200, "#{name}: replaced, #{list.length(t)} tracks, #{s.color()}" ^
+          (if s.live then "" else "; starts after the current song" end))
       else
         c = if color != "" then color else random_color() end
-        stations := list.add((name, make_station(name, c, t)), stations())
-        save(name, c, t)
+        s = make_station(name, c, t, live)
+        if live then s.replace(t, start) end
+        stations := list.add((name, s), stations())
+        save(name, c, t, live)
         message(res, 201, "#{name}: created, #{list.length(t)} tracks, #{c}")
       end
     catch err do

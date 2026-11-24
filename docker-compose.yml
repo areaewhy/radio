@@ -13,6 +13,7 @@ services:
     environment:
       BITRATE: "128"
       PREFETCH: "3"        # tracks downloaded ahead of the one playing
+      LOCAL_POST_ONLY: "false"  # "true": refuse POST /playlist that came through Cloudflare
     volumes:
       - radio-data:/data   # stations, playlists, play positions
 
