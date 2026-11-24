@@ -52,9 +52,18 @@ finishes what it already downloaded and plays silence; the first listener starts
 - No secret in the image = `POST /playlist` returns 403.
 - Rotate: write a new token to the file, then
   `tr -d '\r\n' < ~/.config/radio/token | md5sum | cut -d' ' -f1 | gh secret set PLAYLIST_TOKEN_MD5`,
-  push (or re-run the workflow), and `docker compose pull && docker compose up -d` on the VM.
-- With Cloudflare **Flexible** SSL, the hop from Cloudflare to the VM is plain HTTP, so the token
-  crosses that hop unencrypted. Fine for a hobby playlist; use Full SSL if that matters.
+  push (or re-run the workflow), and `docker compose pull && docker compose up -d` on the server.
+
+## Security notes
+
+- Port 80 binds to `127.0.0.1` only: reachable from the server itself (and cloudflared), not the
+  LAN or the internet. `BIND=0.0.0.0` in `.env` opens it up if you really need that.
+- Track URLs must be `http://` or `https://` (no `file://`, no local paths).
+- Station names are `a-z 0-9 -`, colors `#RRGGBB`; pages insert text with `textContent`.
+- The container runs as the non-root `liquidsoap` user and only writes to its `/data` volume.
+- **No listener cap.** Liquidsoap's built-in server cannot limit or kick listeners. Each listener
+  costs 128 kbps of upload; if that matters, cap the server's upload with your router's QoS, or
+  put Icecast (which has `<max-listeners>`) in front.
 
 ## Run locally
 
@@ -64,31 +73,20 @@ docker compose up -d --build                       # http://localhost/
 python playlist.py push http://localhost acdc.json --name acdc
 ```
 
-## Deploy on Oracle Cloud (Always Free, Ampere A1 / Ubuntu)
+## Host at home with a Cloudflare Tunnel (recommended)
 
-1. Create the VM ([Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)).
-   Image is multi-arch, so arm64 is fine.
-2. Install Docker: [docs.docker.com/engine/install/ubuntu](https://docs.docker.com/engine/install/ubuntu/).
-3. Open port 80 in **both** places:
-   - VCN security list / NSG: ingress TCP 80 ([docs](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securitylists.htm)).
-     Tighten the source to [Cloudflare's IP ranges](https://www.cloudflare.com/ips/) once it works.
-   - The VM's own iptables (Oracle's Ubuntu image blocks it by default):
-     ```sh
-     sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-     sudo netfilter-persistent save
-     ```
-4. Copy `docker-compose.yml` to the VM, then `docker compose pull && docker compose up -d`,
-   then from your machine `python playlist.py push https://radio.<yourdomain> acdc.json --name acdc`. Image: `ghcr.io/areaewhy/radio` (amd64 + arm64,
-   built by `.github/workflows/image.yml` on every push to `main`).
-5. Idle reclaim: Oracle may reclaim an Always Free VM that stays mostly idle for 7 days; upgrading the
-   account to Pay-As-You-Go avoids it (still free within limits; set a budget alert).
+No open ports on your router, your home IP stays hidden, and HTTPS is handled by Cloudflare.
+[Cloudflare Tunnel docs](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-remote-tunnel/)
 
-## Cloudflare
+1. Cloudflare dashboard > Zero Trust > Networks > Tunnels > **Create a tunnel** (Cloudflared).
+   Copy the token into `.env` next to `docker-compose.yml`: `TUNNEL_TOKEN=...` (`.env` is gitignored).
+2. In the tunnel, add a **public hostname**: `radio.<yourdomain>` -> service `HTTP` `radio:8000`.
+3. On the server: `docker compose --profile tunnel pull && docker compose --profile tunnel up -d`.
+4. From your machine: `python playlist.py push https://radio.<yourdomain> acdc.json --name acdc`.
 
-- DNS: `A radio.<yourdomain>` -> VM public IP, **proxied** (orange cloud).
-- SSL: set **Flexible** for this hostname only via a
-  [Configuration Rule](https://developers.cloudflare.com/rules/configuration-rules/)
-  ([Flexible mode](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/flexible/)).
-- Caveat: Cloudflare's [CDN terms](https://www.cloudflare.com/service-specific-terms-application-services/)
-  restrict serving large non-HTML media on non-Enterprise plans. If they object, grey-cloud the record
-  (you then need TLS on the VM, e.g. Caddy).
+Image: `ghcr.io/areaewhy/radio` (amd64 + arm64), built by `.github/workflows/image.yml` on every
+push to `main`. Quick test without an account: `cloudflared tunnel --url http://localhost:80`
+gives a random `trycloudflare.com` URL.
+
+Caveat: Cloudflare's [CDN terms](https://www.cloudflare.com/service-specific-terms-application-services/)
+restrict serving large non-HTML media on non-Enterprise plans; a small hobby stream is a gray area.

@@ -7,11 +7,26 @@ services:
         PLAYLIST_TOKEN_MD5: ${PLAYLIST_TOKEN_MD5:-}
     restart: unless-stopped
     ports:
-      - "80:8000"          # Cloudflare (Flexible SSL) -> VM:80 -> container:8000
+      # Localhost only by default: reachable from this machine (and a cloudflared
+      # on it), not from the LAN. BIND=0.0.0.0 to accept direct traffic.
+      - "${BIND:-127.0.0.1}:80:8000"
     environment:
       BITRATE: "128"
       PREFETCH: "3"        # tracks downloaded ahead of the one playing
     volumes:
-      - radio-data:/data   # play position, survives restarts
+      - radio-data:/data   # stations, playlists, play positions
+
+  # Optional: `docker compose --profile tunnel up -d`. Needs TUNNEL_TOKEN in .env
+  # (Cloudflare dashboard > Zero Trust > Networks > Tunnels > create; public
+  # hostname service = http://radio:8000). No ports opened on the router.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [tunnel]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on: [radio]
+
 volumes:
   radio-data:

@@ -7,8 +7,7 @@ settings.log.file := false
 
 port = int_of_string(environment.get(default="8000", "PORT"))
 bitrate = int_of_string(environment.get(default="128", "BITRATE"))
-prefetch = int_of_string(environment.get(default="3", "PREFETCH"))
-# MD5 of the POST token, baked in at build time from a GitHub secret.
+prefetch = int_of_string(environment.get(default="3", "PREFETCH"))# MD5 of the POST token, baked in at build time from a GitHub secret.
 # Empty = POST /playlist disabled.
 token_md5 = string.case(lower=true,
   string.trim(environment.get(default="", "PLAYLIST_TOKEN_MD5")))
@@ -181,6 +180,12 @@ def set_playlist(req, res) =
         error.raise(error.invalid, "color must be #RRGGBB (got \"#{color}\")")
       end
       if list.length(t) == 0 then error.raise(error.invalid, "no tracks") end
+      # Only web URLs: no file://, no other protocols or local paths.
+      bad = list.filter(fun (x) -> not r/^https?:\/\/[^\s]+$/i.test(x.url), t)
+      if list.length(bad) > 0 then
+        error.raise(error.invalid,
+          "#{list.length(bad)} track url(s) not http(s), e.g. \"#{list.hd(bad).url}\"")
+      end
       s = find(name)
       if list.length(s) > 0 then
         s = list.hd(s)
