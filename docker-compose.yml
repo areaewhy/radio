@@ -1,0 +1,13 @@
+services:
+  radio:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "80:8000"          # Cloudflare (Flexible SSL) -> VM:80 -> container:8000
+    environment:
+      BITRATE: "128"
+      PREFETCH: "3"        # tracks downloaded ahead of the one playing
+    volumes:
+      - radio-data:/data   # play position, survives restarts
+volumes:
+  radio-data:
