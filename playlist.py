@@ -1,5 +1,4 @@
 """Build, shuffle or push playlist.json. Standard library only.
-(andymp3.py builds one from andymp3.com artist pages.)
 
   python playlist.py scrape <page-url> [-o playlist.json] [--shuffle]
   python playlist.py shuffle [playlist.json]

@@ -17,10 +17,6 @@ moment. Built on [Liquidsoap 2.4](https://www.liquidsoap.info/doc-2.4.6/)
 ## Building playlists
 
 ```sh
-# andymp3.com: the green (#8AFB17) shows on one or more artist pages, every track,
-# artist + album (show name) filled in. --all for every show; waits 1 s between requests.
-python andymp3.py "https://andymp3.com/music/getArtistDetail.aspx?q=/acdc&id=510" -o acdc.json
-
 python playlist.py scrape https://any-site/page-with-mp3-links -o mix.json   # generic: url + title
 python playlist.py shuffle acdc.json                                           # randomize in place
 ```
