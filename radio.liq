@@ -14,7 +14,15 @@ token_md5 = string.case(lower=true,
 www_dir = "/radio/www"
 stations_dir = "/data/stations"   # <name>.json (playlist) + <name>.pos
 
-if not file.exists(stations_dir) then file.mkdir(stations_dir) end
+if not file.exists(stations_dir) then
+  try file.mkdir(stations_dir) catch _ do () end
+end
+if not file.exists(stations_dir) then
+  print("FATAL: cannot create #{stations_dir}. /data must be writable by uid 100 " ^
+        "(the container's liquidsoap user). Use a named volume (radio-data:/data) " ^
+        "or, for a host folder: sudo chown -R 100:101 <folder>")
+  exit(1)
+end
 
 # Used when a POST gives no color. Bright enough to read on black.
 palette = ["#8AFB17", "#FF5E5B", "#00CECB", "#FFD23F", "#C77DFF", "#FF8C42",
