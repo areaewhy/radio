@@ -34,8 +34,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # MD5 of the POST /playlist token; the token itself never leaves the owner's machine.
-          build-args: |
-            PLAYLIST_TOKEN_MD5=${{ secrets.PLAYLIST_TOKEN_MD5 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

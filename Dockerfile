@@ -5,9 +5,7 @@ RUN mkdir -p /data && chown liquidsoap:liquidsoap /data
 USER liquidsoap
 COPY radio.liq /radio/radio.liq
 COPY www/ /radio/www/
-# Playlist lives in the /data volume and is set via POST /playlist.
-# Only the token's MD5 is baked in (image is public; the token is not).
-ARG PLAYLIST_TOKEN_MD5=""
-ENV PLAYLIST_TOKEN_MD5=$PLAYLIST_TOKEN_MD5
+# Stations live in the /data volume and are set via POST /playlist. The token's MD5
+# comes from the PLAYLIST_TOKEN_MD5 environment variable at run time (see README).
 EXPOSE 8000
 CMD ["/radio/radio.liq"]

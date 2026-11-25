@@ -1,16 +1,15 @@
 services:
   radio:
     image: ghcr.io/areaewhy/radio:latest   # server: docker compose pull
-    build:                                 # local:  docker compose up -d --build
-      context: .
-      args:
-        PLAYLIST_TOKEN_MD5: ${PLAYLIST_TOKEN_MD5:-}
+    build: .                               # local:  docker compose up -d --build
     restart: unless-stopped
     ports:
       # Localhost only by default: reachable from this machine (and a cloudflared
       # on it), not from the LAN. BIND=0.0.0.0 to accept direct traffic.
       - "${BIND:-127.0.0.1}:80:8000"
     environment:
+      # MD5 of your POST token (README > Token). Unset = stations can't be changed.
+      PLAYLIST_TOKEN_MD5: ${PLAYLIST_TOKEN_MD5:-}
       BITRATE: "128"
       PREFETCH: "3"        # tracks downloaded ahead of the one playing
       LOCAL_POST_ONLY: "false"  # "true": refuse POST /playlist that came through Cloudflare
