@@ -54,14 +54,38 @@ finishes what it already downloaded and plays silence; the first listener starts
 
 ### Token
 
-- The token lives only on your machine: `~/.config/radio/token` (or the `RADIO_TOKEN` env var).
-- Its **MD5** is the repo secret `PLAYLIST_TOKEN_MD5`, baked into the image at build time.
-  The image is public, so only the hash goes in it. MD5 is what Liquidsoap has built in;
-  recovering a 256-bit random token from its MD5 hash is not practical.
-- No secret in the image = `POST /playlist` returns 403.
-- Rotate: write a new token to the file, then
-  `tr -d '\r\n' < ~/.config/radio/token | md5sum | cut -d' ' -f1 | gh secret set PLAYLIST_TOKEN_MD5`,
-  push (or re-run the workflow), and `docker compose pull && docker compose up -d` on the server.
+Changing stations (`POST /playlist`) needs a token. The radio only stores its **MD5**
+(`PLAYLIST_TOKEN_MD5`); the token itself stays with whoever pushes playlists (`playlist.py`,
+jellytune). MD5 is what Liquidsoap has built in; recovering a 256-bit random token from its MD5
+is not practical. No hash configured = `POST /playlist` returns 403.
+
+**Hosting your own radio? Make your own token. Required:** the published image has a default
+hash baked in, and whoever holds that token could change your stations.
+
+```sh
+# 1. A random token: keep it; this is what playlist.py and jellytune send
+mkdir -p ~/.config/radio
+python3 -c "import secrets; print(secrets.token_urlsafe(32))" > ~/.config/radio/token
+
+# 2. Its MD5: this is what the radio checks
+tr -d '\r\n' < ~/.config/radio/token | md5sum | cut -d' ' -f1
+```
+
+```yaml
+# 3. In your radio compose (overrides the image's default at runtime; no rebuild)
+    environment:
+      PLAYLIST_TOKEN_MD5: "<the md5 from step 2>"
+```
+
+Then `docker compose up -d`. `playlist.py push` reads `~/.config/radio/token` (or `RADIO_TOKEN`);
+jellytune takes the token as `RADIO_TOKEN`. Windows (PowerShell) for step 2:
+`[BitConverter]::ToString([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes((Get-Content ~\.config\radio\token -Raw).Trim()))).Replace('-','').ToLower()`
+
+To rotate: new token in step 1, new hash in step 3, `docker compose up -d`, and update
+`RADIO_TOKEN` wherever jellytune runs.
+
+(The image's default comes from the repo secret `PLAYLIST_TOKEN_MD5`, built in by
+`.github/workflows/image.yml`.)
 
 ## Security notes
 
